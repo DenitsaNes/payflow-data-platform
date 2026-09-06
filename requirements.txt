@@ -1,0 +1,38 @@
+# PayFlow data platform dependencies
+# Install with: pip install -r requirements.txt
+
+# Core data handling
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.24.0
+
+# Database
+pymysql>=1.1.0
+SQLAlchemy>=2.0.0
+cryptography>=42.0.0  # Required by pymysql for newer MySQL auth
+
+# AWS
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Data validation
+great-expectations>=0.18.0
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.1.0
+
+# Dashboard / notebooks
+streamlit>=1.30.0
+jupyter>=1.0.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Data transformation
+dbt-core>=1.7.0
+dbt-mysql>=1.7.0
+
+# Utilities
+python-dotenv>=1.0.0
+PyYAML>=6.0.1
+requests>=2.31.0

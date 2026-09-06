@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: stg_internal_transactions
+    description: Cleaned internal transaction records.
+    columns:
+      - name: transaction_id
+        tests:
+          - not_null
+
+  - name: stg_gateway_transactions
+    description: Deduplicated provider-reported transactions.
+    columns:
+      - name: transaction_id
+        tests:
+          - not_null
+      - name: provider
+        tests:
+          - not_null
+
+  - name: fct_reconciliation
+    description: Reconciliation results comparing internal vs gateway transactions.
+    columns:
+      - name: transaction_id
+        tests:
+          - not_null
+      - name: reconciliation_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['MATCH', 'AMOUNT_MISMATCH', 'STATUS_MISMATCH', 'MISSING_FROM_GATEWAY', 'MISSING_INTERNAL']
+
+  - name: fct_transactions
+    description: Star-schema fact table of provider transactions.
+    columns:
+      - name: transaction_id
+        tests:
+          - not_null
+      - name: merchant_key
+        tests:
+          - not_null
+      - name: provider_key
+        tests:
+          - not_null
+
+  - name: fct_billing
+    description: Monthly billing calculation per merchant.
+    columns:
+      - name: merchant_key
+        tests:
+          - not_null
+      - name: billing_period
+        tests:
+          - not_null
+      - name: amount_due
+        tests:
+          - not_null

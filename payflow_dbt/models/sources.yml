@@ -1,0 +1,24 @@
+version: 2
+
+sources:
+  - name: payflow
+    database: payflow
+    schema: payflow
+    tables:
+      - name: reconciliation_internal_transactions
+        description: PayFlow's internal transaction records.
+        columns:
+          - name: transaction_id
+            tests:
+              - not_null
+      - name: reconciliation_gateway_transactions
+        description: Provider-reported transactions after ingestion and normalization.
+        columns:
+          - name: transaction_id
+            tests:
+              - not_null
+      - name: warehouse_dim_merchant
+      - name: warehouse_dim_provider
+      - name: warehouse_dim_currency
+      - name: warehouse_dim_transaction_status
+      - name: warehouse_dim_date

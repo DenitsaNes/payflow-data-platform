@@ -1,0 +1,22 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: payflow-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: payflow
+      MYSQL_USER: payflow
+      MYSQL_PASSWORD: payflow
+    ports:
+      - "3307:3306"
+    volumes:
+      - payflow_mysql_data:/var/lib/mysql
+      - ./sql/schema:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  payflow_mysql_data:
