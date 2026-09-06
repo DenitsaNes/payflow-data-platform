@@ -5,6 +5,23 @@ sources:
     database: payflow
     schema: payflow
     tables:
+      - name: bronze_raw_provider_files
+        description: File-level metadata for raw provider files landed in Bronze.
+      - name: bronze_provider_transactions
+        description: Raw provider records landed in Bronze with original columns stored as JSON.
+      - name: silver_transactions
+        description: Cleaned, validated, deduplicated canonical transactions.
+        columns:
+          - name: transaction_id
+            tests:
+              - not_null
+          - name: source_system
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['internal', 'provider_a', 'provider_b', 'provider_c']
+      - name: silver_rejected_transactions
+        description: Records that failed Silver validation, with rejection reasons.
       - name: reconciliation_internal_transactions
         description: PayFlow's internal transaction records.
         columns:
@@ -12,7 +29,7 @@ sources:
             tests:
               - not_null
       - name: reconciliation_gateway_transactions
-        description: Provider-reported transactions after ingestion and normalization.
+        description: Legacy provider-reported transactions (backfilled from Silver).
         columns:
           - name: transaction_id
             tests:

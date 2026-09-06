@@ -41,7 +41,8 @@ WITH latest_gateway_record AS (
             PARTITION BY transaction_id, provider
             ORDER BY transaction_timestamp DESC, loaded_at DESC
         ) AS rn
-    FROM reconciliation_gateway_transactions
+    FROM silver_transactions
+    WHERE source_system <> 'internal'
 ),
 
 gateway AS (

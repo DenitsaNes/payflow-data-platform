@@ -19,6 +19,7 @@ CANONICAL_COLUMNS = [
     "transaction_id",
     "transaction_timestamp",
     "provider",
+    "source_system",
     "merchant_id",
     "amount",
     "currency",
@@ -91,10 +92,12 @@ def normalize_timestamp(ts: str) -> str:
 
 def load_provider_a(file_path: Path) -> pd.DataFrame:
     """Load Provider A CSV file."""
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
+    has_source_file = "source_file" in df.columns
     df = df.rename(columns=COLUMN_MAP["provider_a"])
     df["provider"] = "provider_a"
-    df["source_file"] = file_path.name
+    df["source_system"] = "provider_a"
+    df["source_file"] = df["source_file"] if has_source_file else file_path.name
     return df
 
 
@@ -102,19 +105,23 @@ def load_provider_b(file_path: Path) -> pd.DataFrame:
     """Load Provider B JSON file."""
     with open(file_path, "r", encoding="utf-8") as f:
         records = json.load(f)
-    df = pd.DataFrame(records)
+    df = pd.DataFrame(records, dtype=str)
+    has_source_file = "source_file" in df.columns
     df = df.rename(columns=COLUMN_MAP["provider_b"])
     df["provider"] = "provider_b"
-    df["source_file"] = file_path.name
+    df["source_system"] = "provider_b"
+    df["source_file"] = df["source_file"] if has_source_file else file_path.name
     return df
 
 
 def load_provider_c(file_path: Path) -> pd.DataFrame:
     """Load Provider C CSV file."""
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
+    has_source_file = "source_file" in df.columns
     df = df.rename(columns=COLUMN_MAP["provider_c"])
     df["provider"] = "provider_c"
-    df["source_file"] = file_path.name
+    df["source_system"] = "provider_c"
+    df["source_file"] = df["source_file"] if has_source_file else file_path.name
     return df
 
 

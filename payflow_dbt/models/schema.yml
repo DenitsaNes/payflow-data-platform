@@ -1,6 +1,29 @@
 version: 2
 
 models:
+  - name: stg_bronze_provider_transactions
+    description: Bronze raw provider records (light view over the source table).
+    columns:
+      - name: bronze_id
+        tests:
+          - not_null
+          - unique
+      - name: provider
+        tests:
+          - not_null
+
+  - name: stg_silver_transactions
+    description: Silver cleaned canonical transactions (view over the source table).
+    columns:
+      - name: transaction_id
+        tests:
+          - not_null
+      - name: source_system
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['internal', 'provider_a', 'provider_b', 'provider_c']
+
   - name: stg_internal_transactions
     description: Cleaned internal transaction records.
     columns:
@@ -9,7 +32,7 @@ models:
           - not_null
 
   - name: stg_gateway_transactions
-    description: Deduplicated provider-reported transactions.
+    description: Deduplicated provider-reported transactions from Silver.
     columns:
       - name: transaction_id
         tests:

@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-PayFlow — Synthetic Data Generator
+PayFlow — Synthetic Data Generator (production-like 10k dataset)
 
 Generates realistic payment transaction data for portfolio demonstration:
 - 100 merchants
 - 30 days of data (September 2026)
 - 10,000 internal transactions
 - Matching gateway transactions from 3 providers with different schemas
-- Realistic data-quality issues:
+- Realistic data-quality issues injected deliberately into provider records:
     * duplicates
     * amount mismatches
     * status mismatches
     * missing-from-gateway records
-    * missing-internal records
+    * missing-internal (gateway-only) records
     * malformed amounts
     * invalid currencies
     * unknown merchants
+    * missing transaction IDs
+    * missing merchant IDs
+    * negative amounts
+    * malformed timestamps
+    * future timestamps
+    * invalid statuses
 
 Run with:
     python src/utils/generate_data.py
@@ -27,6 +33,8 @@ import random
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from src.utils.config import MAX_TRANSACTION_DATE
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -62,10 +70,15 @@ ERROR_RATES = {
     "status_mismatch": 0.02,
     "duplicate": 0.01,
     "late_arrival": 0.03,
+    "missing_transaction_id": 0.005,
+    "missing_merchant_id": 0.005,
+    "negative_amount": 0.005,
+    "malformed_timestamp": 0.005,
+    "future_timestamp": 0.005,
+    "invalid_currency": 0.005,
+    "invalid_status": 0.005,
+    "unknown_merchant": 0.005,
 }
-
-# Provider C specific bad records
-PROVIDER_C_BAD_RECORD_RATE = 0.005  # 0.5% of provider C records
 
 # Extra gateway-only transactions (missing from internal)
 EXTRA_GATEWAY_TRANSACTIONS = 150
@@ -121,6 +134,68 @@ def format_timestamp_for_provider(ts: datetime, provider: str) -> str:
     return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def provider_status_from_base(base_status: str, provider: str) -> str:
+    """Map a canonical internal status to the provider-specific status.
+
+    If the base status is not a canonical value (e.g. an injected invalid status),
+    keep it as-is so validation can reject it.
+    """
+    canonical = {"SUCCESS", "FAILED", "REFUNDED"}
+    if base_status not in canonical:
+        return base_status
+    return internal_status_to_provider(base_status, provider)
+
+
+def inject_quality_issue(record: dict, provider: str) -> dict:
+    """
+    Inject a single realistic data-quality issue into a provider record.
+    Returns the mutated record.
+    """
+    issue = random.choices(
+        population=[
+            "missing_transaction_id",
+            "missing_merchant_id",
+            "negative_amount",
+            "malformed_timestamp",
+            "future_timestamp",
+            "invalid_currency",
+            "invalid_status",
+            "unknown_merchant",
+        ],
+        weights=[
+            ERROR_RATES["missing_transaction_id"],
+            ERROR_RATES["missing_merchant_id"],
+            ERROR_RATES["negative_amount"],
+            ERROR_RATES["malformed_timestamp"],
+            ERROR_RATES["future_timestamp"],
+            ERROR_RATES["invalid_currency"],
+            ERROR_RATES["invalid_status"],
+            ERROR_RATES["unknown_merchant"],
+        ],
+        k=1,
+    )[0]
+
+    if issue == "missing_transaction_id":
+        record["transaction_id"] = ""
+    elif issue == "missing_merchant_id":
+        record["merchant_id"] = ""
+    elif issue == "negative_amount":
+        record["amount"] = -abs(record["amount"])
+    elif issue == "malformed_timestamp":
+        record["timestamp"] = random.choice(["not-a-date", "2026-13-45 25:00:00", ""])
+    elif issue == "future_timestamp":
+        future = MAX_TRANSACTION_DATE + timedelta(days=random.randint(1, 90))
+        record["timestamp"] = future
+    elif issue == "invalid_currency":
+        record["currency"] = random.choice(["XYZ", "ABC", "000"])
+    elif issue == "invalid_status":
+        record["status"] = random.choice(["HOLD", "UNKNOWN", "PENDING_REVIEW"])
+    elif issue == "unknown_merchant":
+        record["merchant_id"] = "M999"
+
+    return record
+
+
 # ---------------------------------------------------------------------------
 # Generate merchants
 # ---------------------------------------------------------------------------
@@ -171,6 +246,8 @@ def generate_internal_transactions(merchants: list[dict]) -> list[dict]:
             "amount": amount,
             "currency": CURRENCY,
             "status": status,
+            "source_system": "internal",
+            "source_file": "internal_transactions_2026_09.csv",
         })
 
     # Sort by timestamp for realism
@@ -206,6 +283,8 @@ def generate_gateway_transactions(
             provider_status = internal_status_to_provider(tx["status"], provider)
             canonical_status = tx["status"]
             ts = tx["transaction_timestamp"]
+            tx_id = tx["transaction_id"]
+            merchant_id = tx["merchant_id"]
 
             # Inject amount mismatch
             if random.random() < ERROR_RATES["amount_mismatch"]:
@@ -226,98 +305,120 @@ def generate_gateway_transactions(
             if random.random() < ERROR_RATES["late_arrival"]:
                 ts = ts + timedelta(minutes=random.randint(10, 120))
 
-            # Provider C bad records: malformed amount, invalid currency, unknown merchant
-            if provider == "provider_c" and random.random() < PROVIDER_C_BAD_RECORD_RATE:
-                bad_type = random.choice(["bad_amount", "bad_currency", "bad_merchant"])
-                if bad_type == "bad_amount":
-                    amount_str = random.choice(["one hundred", "N/A", ""])
-                else:
-                    amount_str = amount
+            # Base canonical record used for gateway and raw transformation
+            base_record = {
+                "transaction_id": tx_id,
+                "merchant_id": merchant_id,
+                "amount": amount,
+                "currency": CURRENCY,
+                "status": canonical_status,
+                "timestamp": ts,
+            }
 
-                if bad_type == "bad_currency":
-                    currency = "XYZ"
-                else:
-                    currency = CURRENCY
+            # Inject realistic quality issues (only a small share of records)
+            total_new_error_rate = sum(ERROR_RATES[k] for k in [
+                "missing_transaction_id", "missing_merchant_id", "negative_amount",
+                "malformed_timestamp", "future_timestamp", "invalid_currency",
+                "invalid_status", "unknown_merchant",
+            ])
+            if random.random() < total_new_error_rate:
+                base_record = inject_quality_issue(base_record, provider)
 
-                if bad_type == "bad_merchant":
-                    merchant_id = "M999"
-                else:
-                    merchant_id = tx["merchant_id"]
+            source_file = f"{provider}_2026_09_{ts.day:02d}.{'csv' if provider != 'provider_b' else 'json'}"
 
-                record_c = {
-                    "transactionId": tx["transaction_id"],
-                    "merchant": merchant_id,
-                    "amount": amount_str,
-                    "currency": currency,
-                    "result": provider_status,
-                    "date": format_timestamp_for_provider(ts, provider),
-                    "source_file": f"provider_c_2026_09_{ts.day:02d}.csv",
-                }
-                provider_c_records.append(record_c)
-                continue
-
-            # Build provider-specific records
+            # Build provider-specific records using the (possibly mutated) base record
             if provider == "provider_a":
                 record = {
-                    "transaction_id": tx["transaction_id"],
-                    "merchant_id": tx["merchant_id"],
-                    "amount": amount,
-                    "currency": CURRENCY,
-                    "status": provider_status,
-                    "timestamp": format_timestamp_for_provider(ts, provider),
-                    "source_file": f"provider_a_2026_09_{ts.day:02d}.csv",
+                    "transaction_id": base_record["transaction_id"],
+                    "merchant_id": base_record["merchant_id"],
+                    "amount": base_record["amount"],
+                    "currency": base_record["currency"],
+                    "status": provider_status_from_base(base_record["status"], provider),
+                    "timestamp": format_timestamp_for_provider(base_record["timestamp"], provider) if isinstance(base_record["timestamp"], datetime) else base_record["timestamp"],
+                    "source_file": source_file,
                 }
                 provider_a_records.append(record)
 
             elif provider == "provider_b":
                 record = {
-                    "payment_id": tx["transaction_id"],
-                    "merchant": tx["merchant_id"],
-                    "value": amount,
-                    "currency": CURRENCY,
-                    "payment_status": provider_status,
-                    "created_at": format_timestamp_for_provider(ts, provider),
-                    "source_file": f"provider_b_2026_09_{ts.day:02d}.json",
+                    "payment_id": base_record["transaction_id"],
+                    "merchant": base_record["merchant_id"],
+                    "value": base_record["amount"],
+                    "currency": base_record["currency"],
+                    "payment_status": provider_status_from_base(base_record["status"], provider),
+                    "created_at": format_timestamp_for_provider(base_record["timestamp"], provider) if isinstance(base_record["timestamp"], datetime) else base_record["timestamp"],
+                    "source_file": source_file,
                 }
                 provider_b_records.append(record)
 
             elif provider == "provider_c":
                 record = {
-                    "transactionId": tx["transaction_id"],
-                    "merchant": tx["merchant_id"],
-                    "amount": amount,
-                    "currency": CURRENCY,
-                    "result": provider_status,
-                    "date": format_timestamp_for_provider(ts, provider),
-                    "source_file": f"provider_c_2026_09_{ts.day:02d}.csv",
+                    "transactionId": base_record["transaction_id"],
+                    "merchant": base_record["merchant_id"],
+                    "amount": base_record["amount"],
+                    "currency": base_record["currency"],
+                    "result": provider_status_from_base(base_record["status"], provider),
+                    "date": format_timestamp_for_provider(base_record["timestamp"], provider) if isinstance(base_record["timestamp"], datetime) else base_record["timestamp"],
+                    "source_file": source_file,
                 }
                 provider_c_records.append(record)
 
-            # Canonical gateway record (normalized status)
+            # Canonical gateway record
             gateway_records.append({
-                "transaction_id": tx["transaction_id"],
+                "transaction_id": base_record["transaction_id"],
                 "provider": provider,
-                "transaction_timestamp": ts,
-                "merchant_id": tx["merchant_id"],
-                "amount": amount,
-                "currency": CURRENCY,
-                "status": canonical_status,
-                "source_file": f"{provider}_2026_09_{ts.day:02d}.{'csv' if provider != 'provider_b' else 'json'}",
+                "transaction_timestamp": base_record["timestamp"] if isinstance(base_record["timestamp"], datetime) else None,
+                "merchant_id": base_record["merchant_id"],
+                "amount": base_record["amount"],
+                "currency": base_record["currency"],
+                "status": base_record["status"],
+                "source_file": source_file,
             })
 
             # Inject duplicate for this provider sometimes
             if random.random() < ERROR_RATES["duplicate"]:
                 dup_ts = ts + timedelta(seconds=random.randint(1, 60))
+                dup_source = f"{provider}_2026_09_{dup_ts.day:02d}.{'csv' if provider != 'provider_b' else 'json'}"
                 gateway_records.append({
-                    "transaction_id": tx["transaction_id"],
+                    "transaction_id": base_record["transaction_id"],
                     "provider": provider,
                     "transaction_timestamp": dup_ts,
-                    "merchant_id": tx["merchant_id"],
-                    "amount": amount,
-                    "currency": CURRENCY,
-                    "status": canonical_status,
-                    "source_file": f"{provider}_2026_09_{ts.day:02d}.{'csv' if provider != 'provider_b' else 'json'}",
+                    "merchant_id": base_record["merchant_id"],
+                    "amount": base_record["amount"],
+                    "currency": base_record["currency"],
+                    "status": base_record["status"],
+                    "source_file": dup_source,
                 })
+                if provider == "provider_a":
+                    provider_a_records.append({
+                        "transaction_id": base_record["transaction_id"],
+                        "merchant_id": base_record["merchant_id"],
+                        "amount": base_record["amount"],
+                        "currency": base_record["currency"],
+                        "status": record["status"],
+                        "timestamp": format_timestamp_for_provider(dup_ts, provider),
+                        "source_file": dup_source,
+                    })
+                elif provider == "provider_b":
+                    provider_b_records.append({
+                        "payment_id": base_record["transaction_id"],
+                        "merchant": base_record["merchant_id"],
+                        "value": base_record["amount"],
+                        "currency": base_record["currency"],
+                        "payment_status": record["payment_status"],
+                        "created_at": format_timestamp_for_provider(dup_ts, provider),
+                        "source_file": dup_source,
+                    })
+                elif provider == "provider_c":
+                    provider_c_records.append({
+                        "transactionId": base_record["transaction_id"],
+                        "merchant": base_record["merchant_id"],
+                        "amount": base_record["amount"],
+                        "currency": base_record["currency"],
+                        "result": record["result"],
+                        "date": format_timestamp_for_provider(dup_ts, provider),
+                        "source_file": dup_source,
+                    })
 
     # Generate extra gateway-only transactions (missing from internal)
     for _ in range(EXTRA_GATEWAY_TRANSACTIONS):
@@ -331,7 +432,6 @@ def generate_gateway_transactions(
         provider_status = internal_status_to_provider(status, provider)
         source_file = f"{provider}_2026_09_{ts.day:02d}.{'csv' if provider != 'provider_b' else 'json'}"
 
-        # Add to provider file so the pipeline can read it
         if provider == "provider_a":
             provider_a_records.append({
                 "transaction_id": tx_id,
@@ -363,7 +463,6 @@ def generate_gateway_transactions(
                 "source_file": source_file,
             })
 
-        # Add to canonical gateway records
         gateway_records.append({
             "transaction_id": tx_id,
             "provider": provider,
@@ -389,7 +488,7 @@ def write_provider_a_csv(records: list[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["transaction_id", "merchant_id", "amount", "currency", "status", "timestamp"],
+            fieldnames=["transaction_id", "merchant_id", "amount", "currency", "status", "timestamp", "source_file"],
         )
         writer.writeheader()
         for r in records:
@@ -400,6 +499,7 @@ def write_provider_a_csv(records: list[dict]) -> None:
                 "currency": r["currency"],
                 "status": r["status"],
                 "timestamp": r["timestamp"],
+                "source_file": r["source_file"],
             })
     print(f"Wrote {len(records)} records to {path}")
 
@@ -420,7 +520,7 @@ def write_provider_c_csv(records: list[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["transactionId", "merchant", "amount", "currency", "result", "date"],
+            fieldnames=["transactionId", "merchant", "amount", "currency", "result", "date", "source_file"],
         )
         writer.writeheader()
         for r in records:
@@ -431,16 +531,19 @@ def write_provider_c_csv(records: list[dict]) -> None:
                 "currency": r["currency"],
                 "result": r["result"],
                 "date": r["date"],
+                "source_file": r["source_file"],
             })
     print(f"Wrote {len(records)} records to {path}")
 
 
 def write_internal_transactions_csv(records: list[dict]) -> None:
-    path = OUTPUT_DIR / "internal_transactions_2026_09.csv"
+    provider_dir = RAW_OUTPUT_DIR / "internal"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    path = provider_dir / "internal_transactions_2026_09.csv"
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["transaction_id", "merchant_id", "amount", "currency", "status", "timestamp"],
+            fieldnames=["transaction_id", "merchant_id", "amount", "currency", "status", "timestamp", "source_system", "source_file"],
         )
         writer.writeheader()
         for r in records:
@@ -451,6 +554,8 @@ def write_internal_transactions_csv(records: list[dict]) -> None:
                 "currency": r["currency"],
                 "status": r["status"],
                 "timestamp": r["transaction_timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
+                "source_system": r["source_system"],
+                "source_file": r["source_file"],
             }
             writer.writerow(row)
     print(f"Wrote {len(records)} records to {path}")
@@ -514,13 +619,14 @@ def write_seed_data_sql(merchants: list[dict], internal_transactions: list[dict]
         f.write("\n-- Seed internal transactions\n")
         f.write("TRUNCATE TABLE reconciliation_internal_transactions;\n")
         for chunk in chunk_list(internal_transactions, 500):
-            f.write("INSERT INTO reconciliation_internal_transactions (transaction_id, transaction_timestamp, merchant_id, amount, currency, status) VALUES\n")
+            f.write("INSERT INTO reconciliation_internal_transactions (transaction_id, transaction_timestamp, merchant_id, amount, currency, status, source_system, source_file) VALUES\n")
             for i, tx in enumerate(chunk):
                 comma = "," if i < len(chunk) - 1 else ";"
                 ts = tx["transaction_timestamp"].strftime("%Y-%m-%d %H:%M:%S")
                 f.write(
                     f"('{tx['transaction_id']}', '{ts}', '{tx['merchant_id']}', "
-                    f"{tx['amount']}, '{tx['currency']}', '{tx['status']}'){comma}\n"
+                    f"{tx['amount']}, '{tx['currency']}', '{tx['status']}', "
+                    f"'{tx['source_system']}', '{tx['source_file']}'){comma}\n"
                 )
 
     print(f"Wrote seed SQL to {path}")
@@ -529,21 +635,37 @@ def write_seed_data_sql(merchants: list[dict], internal_transactions: list[dict]
 def write_seed_gateway_sql(gateway_records: list[dict]) -> None:
     path = OUTPUT_DIR / "seed_gateway_transactions.sql"
     with path.open("w", encoding="utf-8") as f:
-        f.write("-- PayFlow — Large synthetic gateway transactions\n")
+        f.write("-- PayFlow — Large synthetic gateway transactions (directly into Silver)\n")
         f.write("USE payflow;\n\n")
-        f.write("TRUNCATE TABLE reconciliation_gateway_transactions;\n")
+        f.write("TRUNCATE TABLE silver_transactions;\n")
 
-        for chunk in chunk_list(gateway_records, 500):
-            f.write("INSERT INTO reconciliation_gateway_transactions (transaction_id, provider, transaction_timestamp, merchant_id, amount, currency, status, source_file) VALUES\n")
+        # Only keep records with valid transaction_id, merchant_id, timestamp, and numeric amount
+        # because Silver is the validated layer. Simpler: keep all and let the Silver cleaner handle them.
+        # For the seed we insert into Silver directly, so filter out obvious rejects.
+        valid_for_silver = []
+        for r in gateway_records:
+            if (
+                r["transaction_id"]
+                and r["merchant_id"]
+                and isinstance(r["transaction_timestamp"], datetime)
+                and isinstance(r["amount"], (int, float))
+                and r["amount"] >= 0
+                and r["currency"] in {"EUR", "USD", "GBP"}
+                and r["status"] in {"SUCCESS", "FAILED", "REFUNDED", "PENDING"}
+                and r["merchant_id"].startswith("M")
+            ):
+                valid_for_silver.append(r)
+
+        for chunk in chunk_list(valid_for_silver, 500):
+            f.write("INSERT IGNORE INTO silver_transactions (transaction_id, transaction_timestamp, source_system, provider, merchant_id, amount, currency, status, source_file, batch_id) VALUES\n")
             for i, r in enumerate(chunk):
                 comma = "," if i < len(chunk) - 1 else ";"
                 ts = r["transaction_timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-                # Escape single quotes in source file if any
                 source_file = r["source_file"].replace("'", "''")
                 f.write(
-                    f"('{r['transaction_id']}', '{r['provider']}', '{ts}', "
+                    f"('{r['transaction_id']}', '{ts}', '{r['provider']}', '{r['provider']}', "
                     f"'{r['merchant_id']}', {r['amount']}, '{r['currency']}', "
-                    f"'{r['status']}', '{source_file}'){comma}\n"
+                    f"'{r['status']}', '{source_file}', 'generated_seed'){comma}\n"
                 )
 
     print(f"Wrote gateway seed SQL to {path}")
@@ -555,6 +677,7 @@ def write_seed_gateway_sql(gateway_records: list[dict]) -> None:
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Generating merchants...")
     merchants = generate_merchants()

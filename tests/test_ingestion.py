@@ -14,9 +14,9 @@ def provider_a_file(tmp_path: Path) -> Path:
     """Create a temporary Provider A CSV file."""
     file_path = tmp_path / "provider_a_test.csv"
     file_path.write_text(
-        "transaction_id,merchant_id,amount,currency,status,timestamp\n"
-        "TX001,M001,125.50,EUR,COMPLETED,2026-09-06 10:32:11\n"
-        "TX002,M002,80.00,EUR,FAILED,2026-09-06 11:00:00\n"
+        "transaction_id,merchant_id,amount,currency,status,timestamp,source_file\n"
+        "TX001,M001,125.50,EUR,COMPLETED,2026-09-06 10:32:11,provider_a_2026_09_06.csv\n"
+        "TX002,M002,80.00,EUR,FAILED,2026-09-06 11:00:00,provider_a_2026_09_06.csv\n"
     )
     return file_path
 
@@ -33,6 +33,7 @@ def provider_b_file(tmp_path: Path) -> Path:
             "currency": "EUR",
             "payment_status": "SUCCESS",
             "created_at": "2026-09-06T10:32:11Z",
+            "source_file": "provider_b_2026_09_06.json",
         },
         {
             "payment_id": "TX003",
@@ -41,6 +42,7 @@ def provider_b_file(tmp_path: Path) -> Path:
             "currency": "EUR",
             "payment_status": "SUCCESS",
             "created_at": "2026-09-06T12:00:00Z",
+            "source_file": "provider_b_2026_09_06.json",
         },
     ]
     file_path.write_text(json.dumps(records))
@@ -52,8 +54,8 @@ def provider_c_file(tmp_path: Path) -> Path:
     """Create a temporary Provider C CSV file."""
     file_path = tmp_path / "provider_c_test.csv"
     file_path.write_text(
-        "transactionId,merchant,amount,currency,result,date\n"
-        "TX001,M001,125.50,EUR,completed,2026-09-06T10:32:11Z\n"
+        "transactionId,merchant,amount,currency,result,date,source_file\n"
+        "TX001,M001,125.50,EUR,completed,2026-09-06T10:32:11Z,provider_c_2026_09_06.csv\n"
     )
     return file_path
 
@@ -65,6 +67,7 @@ def test_process_provider_a_normalizes_columns(provider_a_file: Path) -> None:
         "transaction_id",
         "transaction_timestamp",
         "provider",
+        "source_system",
         "merchant_id",
         "amount",
         "currency",
@@ -101,9 +104,9 @@ def test_process_provider_c_normalizes_columns(provider_c_file: Path) -> None:
 def test_amount_coerced_to_numeric(tmp_path: Path) -> None:
     file_path = tmp_path / "provider_c_bad.csv"
     file_path.write_text(
-        "transactionId,merchant,amount,currency,result,date\n"
-        "TX001,M001,one hundred,EUR,completed,2026-09-06T10:32:11Z\n"
-        "TX002,M002,50.00,EUR,completed,2026-09-06T11:00:00Z\n"
+        "transactionId,merchant,amount,currency,result,date,source_file\n"
+        "TX001,M001,one hundred,EUR,completed,2026-09-06T10:32:11Z,provider_c_bad.csv\n"
+        "TX002,M002,50.00,EUR,completed,2026-09-06T11:00:00,provider_c_bad.csv\n"
     )
 
     df = process_provider(file_path, "provider_c")
@@ -111,3 +114,16 @@ def test_amount_coerced_to_numeric(tmp_path: Path) -> None:
     # Bad amount becomes NaN
     assert pd.isna(df["amount"].iloc[0])
     assert df["amount"].iloc[1] == 50.00
+
+
+def test_source_system_matches_provider(provider_a_file: Path) -> None:
+    df = process_provider(provider_a_file, "provider_a")
+    assert df["source_system"].tolist() == ["provider_a", "provider_a"]
+
+
+def test_source_file_preserved_from_input(provider_b_file: Path) -> None:
+    df = process_provider(provider_b_file, "provider_b")
+    assert df["source_file"].tolist() == [
+        "provider_b_2026_09_06.json",
+        "provider_b_2026_09_06.json",
+    ]

@@ -5,6 +5,7 @@ SELECT
     amount,
     currency,
     status,
-    loaded_at,
-    'internal' AS source_system
+    source_system,
+    source_file,
+    loaded_at
 FROM {{ source('payflow', 'reconciliation_internal_transactions') }}

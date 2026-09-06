@@ -1,8 +1,9 @@
-"""PayFlow — Load validated transactions into MySQL.
+"""PayFlow — Load Silver transactions into the legacy reconciliation gateway table.
 
-Reads the valid_transactions.parquet file and loads the records into the
-reconciliation_gateway_transactions table. Uses SQLAlchemy for the connection
-and INSERTs records in batches for performance.
+This module copies valid, deduplicated Silver provider transactions into
+reconciliation_gateway_transactions so the existing reconciliation SQL can
+run unchanged. The long-term target is to make all downstream SQL read from
+silver_transactions directly.
 """
 
 import argparse
@@ -15,29 +16,30 @@ from src.utils.config import PROCESSED_DIR
 from src.utils.db import get_engine
 
 
-def load_to_mysql(input_file: Path, batch_size: int = 1000) -> int:
-    """Load valid transactions into reconciliation_gateway_transactions."""
-    df = pd.read_parquet(input_file)
-    print(f"Read {len(df)} valid records from {input_file}")
+def load_to_mysql(batch_size: int = 1000) -> int:
+    """Load Silver provider transactions into reconciliation_gateway_transactions."""
+    engine = get_engine()
+
+    # Read valid provider transactions from the Silver layer
+    query = """
+        SELECT
+            transaction_id,
+            provider,
+            transaction_timestamp,
+            merchant_id,
+            amount,
+            currency,
+            status,
+            source_file
+        FROM silver_transactions
+        WHERE source_system <> 'internal'
+    """
+    df = pd.read_sql_query(text(query), engine.connect())
+    print(f"Read {len(df)} Silver provider records")
 
     if df.empty:
         print("No records to load.")
         return 0
-
-    # Rename columns to match MySQL table
-    columns = [
-        "transaction_id",
-        "provider",
-        "transaction_timestamp",
-        "merchant_id",
-        "amount",
-        "currency",
-        "status",
-        "source_file",
-    ]
-    df = df[columns]
-
-    engine = get_engine()
 
     # Clear existing gateway records before loading fresh data
     with engine.begin() as conn:
@@ -66,13 +68,7 @@ def load_to_mysql(input_file: Path, batch_size: int = 1000) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load validated transactions into MySQL")
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=PROCESSED_DIR / "valid_transactions.parquet",
-        help="Path to valid_transactions.parquet",
-    )
+    parser = argparse.ArgumentParser(description="Load Silver provider transactions into MySQL")
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -81,7 +77,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    load_to_mysql(args.input, args.batch_size)
+    load_to_mysql(args.batch_size)
 
 
 if __name__ == "__main__":

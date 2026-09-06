@@ -26,7 +26,7 @@ SELECT
     s.status_key,
     g.amount,
     g.source_file
-FROM reconciliation_gateway_transactions g
+FROM silver_transactions g
 LEFT JOIN warehouse_dim_merchant m
     ON g.merchant_id = m.merchant_id
 LEFT JOIN warehouse_dim_provider p
@@ -34,4 +34,5 @@ LEFT JOIN warehouse_dim_provider p
 LEFT JOIN warehouse_dim_currency c
     ON g.currency = c.currency_code
 LEFT JOIN warehouse_dim_transaction_status s
-    ON g.status = s.status_code;
+    ON g.status = s.status_code
+WHERE g.source_system <> 'internal';

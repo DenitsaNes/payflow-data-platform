@@ -30,6 +30,110 @@ CREATE TABLE staging_transactions (
 );
 
 -- ---------------------------------------------------------------------------
+-- Bronze layer — raw provider files and records
+-- ---------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS bronze_provider_transactions;
+DROP TABLE IF EXISTS bronze_raw_provider_files;
+
+CREATE TABLE bronze_raw_provider_files (
+    file_id INT AUTO_INCREMENT PRIMARY KEY,
+    source_file VARCHAR(512) NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    file_format VARCHAR(16),
+    batch_id VARCHAR(64) NOT NULL,
+    loaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    record_count INT,
+    status VARCHAR(32) DEFAULT 'loaded',
+    UNIQUE KEY uq_bronze_file (source_file, provider)
+);
+
+CREATE TABLE bronze_provider_transactions (
+    bronze_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    file_id INT,
+    transaction_id VARCHAR(64),
+    transaction_timestamp VARCHAR(255),
+    provider VARCHAR(32) NOT NULL,
+    merchant_id VARCHAR(64),
+    amount VARCHAR(255),
+    currency VARCHAR(16),
+    status VARCHAR(64),
+    source_file VARCHAR(512),
+    source_system VARCHAR(32) GENERATED ALWAYS AS (provider) STORED,
+    batch_id VARCHAR(64) NOT NULL,
+    loaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    raw_record JSON,
+    FOREIGN KEY (file_id) REFERENCES bronze_raw_provider_files(file_id),
+    INDEX idx_bronze_batch (batch_id),
+    INDEX idx_bronze_txn (transaction_id, provider)
+);
+
+-- ---------------------------------------------------------------------------
+-- Silver layer — cleaned, validated, deduplicated canonical transactions
+-- ---------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS silver_transactions;
+DROP TABLE IF EXISTS silver_rejected_transactions;
+
+CREATE TABLE silver_transactions (
+    silver_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    transaction_id VARCHAR(64) NOT NULL,
+    transaction_timestamp DATETIME NOT NULL,
+    source_system VARCHAR(32) NOT NULL,
+    provider VARCHAR(32),
+    merchant_id VARCHAR(32) NOT NULL,
+    amount DECIMAL(18, 4) NOT NULL,
+    currency CHAR(3) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    source_file VARCHAR(512),
+    batch_id VARCHAR(64) NOT NULL,
+    loaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    cleaned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_silver_txn_provider (transaction_id, provider),
+    INDEX idx_silver_merchant (merchant_id),
+    INDEX idx_silver_status (status),
+    INDEX idx_silver_provider (provider),
+    INDEX idx_silver_batch (batch_id)
+);
+
+CREATE TABLE silver_rejected_transactions (
+    rejected_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    transaction_id VARCHAR(64),
+    transaction_timestamp VARCHAR(255),
+    source_system VARCHAR(32),
+    provider VARCHAR(32),
+    merchant_id VARCHAR(64),
+    amount VARCHAR(255),
+    currency VARCHAR(16),
+    status VARCHAR(64),
+    source_file VARCHAR(512),
+    batch_id VARCHAR(64) NOT NULL,
+    rejection_reason TEXT,
+    rejection_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    raw_json JSON,
+    INDEX idx_rejected_batch (batch_id),
+    INDEX idx_rejected_reason (rejection_reason(64))
+);
+
+-- ---------------------------------------------------------------------------
+-- Pipeline idempotency log
+-- ---------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS pipeline_processed_files;
+
+CREATE TABLE pipeline_processed_files (
+    processed_id INT AUTO_INCREMENT PRIMARY KEY,
+    source_file VARCHAR(512) NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    batch_id VARCHAR(64) NOT NULL,
+    loaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    records_loaded INT,
+    records_rejected INT,
+    status VARCHAR(32) DEFAULT 'success',
+    UNIQUE KEY uq_processed_file (source_file, provider, batch_id)
+);
+
+-- ---------------------------------------------------------------------------
 -- Dimension tables
 -- ---------------------------------------------------------------------------
 
@@ -156,6 +260,8 @@ CREATE TABLE reconciliation_internal_transactions (
     amount                  DECIMAL(18, 4) NOT NULL,
     currency                CHAR(3) NOT NULL,
     status                  VARCHAR(32) NOT NULL,
+    source_system           VARCHAR(32) DEFAULT 'internal',
+    source_file             VARCHAR(512) DEFAULT 'internal_transactions.csv',
     loaded_at               DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

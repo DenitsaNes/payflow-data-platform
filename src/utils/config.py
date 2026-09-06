@@ -1,7 +1,12 @@
 """PayFlow — shared configuration."""
 
 import os
+from datetime import datetime
 from pathlib import Path
+
+# Processing date used for "future timestamp" validation.
+# The synthetic dataset covers September 2026.
+MAX_TRANSACTION_DATE = datetime(2026, 9, 30)
 
 # Database connection settings
 DB_HOST = os.getenv("PAYFLOW_DB_HOST", "127.0.0.1")

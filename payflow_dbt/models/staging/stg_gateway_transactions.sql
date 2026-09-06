@@ -13,7 +13,8 @@ WITH deduplicated AS (
             PARTITION BY transaction_id, provider
             ORDER BY transaction_timestamp DESC, loaded_at DESC
         ) AS rn
-    FROM {{ source('payflow', 'reconciliation_gateway_transactions') }}
+    FROM {{ source('payflow', 'silver_transactions') }}
+    WHERE source_system <> 'internal'
 )
 
 SELECT

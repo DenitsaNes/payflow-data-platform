@@ -63,52 +63,46 @@ PayFlow needs:
 ## Architecture
 
 ```text
-                 PAYMENT PROVIDERS
-              /        |        \
-           CSV       JSON       API
-             \         |         /
-              \        |        /
-                   AWS S3
-                     |
-          +----------+----------+
-          |                     |
-       Batch                Streaming
-          |                     |
-       AWS Glue            AWS Kinesis
-          |                     |
-          +----------+----------+
-                     |
-                     ▼
-              TRANSFORMATION
-                 Python / PySpark
-                     |
-            Bronze / Silver / Gold
-                     |
-                     ▼
-                MySQL 8.0
-                     |
-              SQL Procedures
-                     |
-          +----------+----------+
-          |                     |
-    Reconciliation          Billing
-          |                     |
-          +----------+----------+
-                     |
-                     ▼
-                Gold Layer
-                     |
-                     ▼
-              BI Dashboard
+  data/generated/raw/
+  ├── provider_a/*.csv
+  ├── provider_b/*.json
+  └── provider_c/*.csv
+           |
+           ▼
+  ┌─────────────────────┐
+  │   Bronze Layer      │  raw_record JSON + file metadata
+  │                     │  bronze_raw_provider_files
+  │                     │  bronze_provider_transactions
+  └─────────────────────┘
+           |
+           ▼
+  ┌─────────────────────┐
+  │   Silver Layer      │  cleaned, validated, deduplicated
+  │                     │  silver_transactions
+  │                     │  silver_rejected_transactions (quarantine)
+  └─────────────────────┘
+           |
+           ▼
+  ┌─────────────────────┐
+  │   Gold Layer        │  star-schema warehouse + reconciliation
+  │                     │  warehouse_fact_transaction
+  │                     │  warehouse_v_reconciliation_summary
+  │                     │  warehouse_billing_summary
+  └─────────────────────┘
+           |
+           ▼
+        BI Dashboard
 ```
 
 ### Data Layers
 
-| Layer | Purpose | Storage |
-|-------|---------|---------|
-| **Bronze** | Raw provider files exactly as received. Immutable. | S3 `raw/` |
-| **Silver** | Cleaned, standardized, deduplicated transactions. | S3 `processed/`, MySQL staging |
-| **Gold** | Business-ready fact and dimension tables. | MySQL `warehouse` schema |
+| Layer | Purpose | Key Tables/Files |
+|-------|---------|------------------|
+| **Bronze** | Raw provider files exactly as received, with metadata and original JSON. | `bronze_raw_provider_files`, `bronze_provider_transactions`, `data/generated/raw/` |
+| **Silver** | Canonical, cleaned, validated, deduplicated transactions plus a quarantine table. | `silver_transactions`, `silver_rejected_transactions` |
+| **Gold** | Business-ready fact/dimension tables, reconciliation, and billing. | `warehouse_fact_transaction`, `warehouse_v_reconciliation_summary`, `warehouse_billing_summary` |
+
+The pipeline is **idempotent**: a `pipeline_processed_files` log and `ON DUPLICATE KEY UPDATE` upserts make reruns safe.
 
 ---
 
@@ -164,13 +158,15 @@ transactionId,merchant,amount,currency,result,date
 ```text
 transaction_id
 transaction_timestamp
-provider
+source_system       -- internal / provider_a / provider_b / provider_c
+provider            -- provider literal (NULL for internal)
 merchant_id
 amount
 currency
 status
-loaded_at
 source_file
+batch_id
+loaded_at
 ```
 
 ---
@@ -231,17 +227,32 @@ dim_merchant ───── fact_transaction ───── dim_provider
 
 ## Data Quality
 
-Incoming records are validated before processing:
+Incoming Bronze records are cleaned and validated in the Silver layer. The first failing rule wins so each rejected record has a clear reason:
 
-- `transaction_id` is not null and unique
-- `amount` is numeric and non-negative
-- `currency` is in the allowed set
-- `timestamp` is valid and not in the future
-- `merchant_id` exists in `dim_merchant`
-- `status` is a known value
-- Duplicate detection across files
+- `missing_transaction_id`
+- `missing_merchant_id`
+- `invalid_amount`
+- `negative_amount`
+- `invalid_currency`
+- `invalid_timestamp`
+- `future_timestamp`
+- `invalid_status`
+- `unknown_merchant`
 
-Invalid records are moved to the `rejected/` prefix and logged in a quarantine table.
+Valid records are deduplicated by `(transaction_id, provider)` and upserted into `silver_transactions`. Invalid records are written to `silver_rejected_transactions` with the raw JSON and rejection reason for investigation.
+
+Sample rejection breakdown after a pipeline run:
+
+```text
+invalid_currency       164
+future_timestamp       148
+invalid_status         143
+negative_amount        139
+unknown_merchant       137
+invalid_timestamp      133
+missing_transaction_id 127
+missing_merchant_id    126
+```
 
 ---
 
@@ -274,12 +285,10 @@ docker compose up -d
 
 MySQL is exposed on host port `3307` to avoid conflicts with any native MySQL install.
 
-### 2. Create schema and seed data
+### 2. Create schema
 
 ```bash
 mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < sql/schema/01_create_database.sql
-mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < data/sample/seed_data.sql
-mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < data/sample/seed_gateway_transactions.sql
 ```
 
 Password: `payflow`
@@ -292,20 +301,29 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Run the pipeline
+### 4. Generate the 10k dataset
 
 ```bash
-python run_pipeline.py
+python src/utils/generate_data.py
 ```
 
-### 5. Reconcile and bill
+This creates realistic provider files and internal transactions under `data/generated/raw/`.
+
+### 5. Seed reference data
 
 ```bash
-mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < sql/reconciliation/reconcile_transactions.sql
-mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < sql/billing/generate_billing.sql
+mysql -h 127.0.0.1 -P 3307 -u payflow -p payflow < data/generated/seed_data.sql
 ```
 
-### 6. Run dbt
+### 6. Run the end-to-end pipeline
+
+```bash
+python run_pipeline.py --source data/generated/raw
+```
+
+The pipeline runs Bronze loading, Silver cleaning/validation/dedup, fact loading, reconciliation, and billing. Rerunning is safe thanks to the idempotency log.
+
+### 7. Run dbt
 
 ```bash
 cd payflow_dbt
@@ -313,11 +331,26 @@ dbt run
 dbt test
 ```
 
-### 7. Run tests
+### 8. Run tests
 
 ```bash
 pytest tests/ -v
 ```
+
+---
+
+## SQL Analytics Examples
+
+Portfolio-ready query examples live in [`sql/queries/`](sql/queries/):
+
+- [`daily_volume_trend.sql`](sql/queries/daily_volume_trend.sql) — running totals and 7-day moving averages
+- [`top_merchants_by_volume.sql`](sql/queries/top_merchants_by_volume.sql) — ranked merchant volume
+- [`provider_reliability.sql`](sql/queries/provider_reliability.sql) — match/mismatch rates per provider
+- [`late_arrival_analysis.sql`](sql/queries/late_arrival_analysis.sql) — gap between internal and gateway timestamps
+- [`duplicate_detection.sql`](sql/queries/duplicate_detection.sql) — duplicate records before deduplication
+- [`rejected_records_breakdown.sql`](sql/queries/rejected_records_breakdown.sql) — quarantine reasons by provider
+
+An index-optimization demonstration is in [`sql/indexes/index_optimization.sql`](sql/indexes/index_optimization.sql).
 
 ---
 
@@ -327,7 +360,9 @@ pytest tests/ -v
 2. **Port mapping matters.** Mapping the Docker MySQL container to host port `3307` prevented collisions with macOS native MySQL and taught me to always isolate dev services.
 3. **Tests need import paths.** Adding `tests/conftest.py` to inject the project root into `sys.path` was the cleanest way to make `pytest` resolve the `src` package without a complex install.
 4. **Data quality is a feature, not an afterthought.** Building rejected-record handling and validation rules from the start made the pipeline robust against malformed provider files.
-5. **dbt changes how you think about analytics code.** Separating staging, marts, and tests made the warehouse much easier to explain and maintain.
+5. **Explicit Bronze/Silver layers make debugging easier.** Landing raw records with metadata in Bronze let me trace a rejected Silver record back to the exact provider file and batch.
+6. **Idempotency is not optional for production pipelines.** Using a processed-files log and `ON DUPLICATE KEY UPDATE` upserts made reruns safe and predictable.
+7. **dbt changes how you think about analytics code.** Separating staging, marts, and tests made the warehouse much easier to explain and maintain.
 
 ---
 
