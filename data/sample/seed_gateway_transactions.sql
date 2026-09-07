@@ -11,7 +11,7 @@ USE payflow;
 
 TRUNCATE TABLE silver_transactions;
 
-INSERT INTO silver_transactions
+INSERT IGNORE INTO silver_transactions
 (transaction_id, transaction_timestamp, source_system, provider, merchant_id, amount, currency, status, source_file, batch_id)
 VALUES
 -- Provider A (CSV format)

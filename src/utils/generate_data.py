@@ -684,13 +684,14 @@ def main() -> None:
     parser.add_argument(
         "--num-transactions",
         type=int,
-        default=NUM_TRANSACTIONS,
+        default=None,
         help="Number of internal transactions to generate (default: 10,000)",
     )
     args = parser.parse_args()
 
     global NUM_TRANSACTIONS, EXTRA_GATEWAY_TRANSACTIONS
-    NUM_TRANSACTIONS = args.num_transactions
+    if args.num_transactions is not None:
+        NUM_TRANSACTIONS = args.num_transactions
     EXTRA_GATEWAY_TRANSACTIONS = max(150, int(NUM_TRANSACTIONS * 0.015))
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
