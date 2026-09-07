@@ -354,6 +354,41 @@ An index-optimization demonstration is in [`sql/indexes/index_optimization.sql`]
 
 ---
 
+## Performance
+
+PayFlow is tested locally on a 2026 MacBook Pro (Apple Silicon) with Docker MySQL 8.0. The pipeline comfortably handles **100,000 internal transactions**, which expand to ~280,000 raw provider records across three gateways.
+
+Run it yourself:
+
+```bash
+python scripts/run_scale_test.py --num-transactions 100000
+```
+
+Representative results:
+
+| Stage | Time | Notes |
+|-------|------|-------|
+| Reset schema | 0.27s | `sql/schema/01_create_database.sql` |
+| Generate data | 2.45s | 100k internal + 100 merchants + ~280k provider rows |
+| Load seed | 1.03s | Reference merchants, dimensions, statuses |
+| Bronze load | 15.32s | Parse CSV/JSON and land raw records |
+| Silver clean | 18.19s | Validate, reject, dedupe, upsert |
+| Fact load | 3.01s | Populate `warehouse_fact_transaction` |
+| Reconciliation | 3.55s | Compare internal vs gateway records |
+| Billing | 0.23s | Compute merchant fees and amount due |
+| **Total** | **~44 s** | End-to-end on a single local container |
+
+Silver output for the 100k run:
+
+```text
+Valid records upserted: 265,758
+Rejected records:       11,088
+```
+
+The bottleneck is the pandas-based Silver cleaner. For a real production deployment this stage would move to a distributed engine (Spark, dbt + warehouse, or Airflow-managed chunks).
+
+---
+
 ## Lessons Learned
 
 1. **MySQL CTE syntax differs from PostgreSQL.** Reconciliation and billing SQL had to be rewritten from `WITH ... INSERT` to `INSERT ... WITH ... SELECT` for MySQL compatibility.
