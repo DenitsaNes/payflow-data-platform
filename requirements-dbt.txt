@@ -1,0 +1,7 @@
+# Minimal dependencies for running dbt in CI.
+# The full local environment still uses requirements.txt.
+
+dbt-core>=1.7.0,<1.8.0
+dbt-mysql>=1.7.0,<1.8.0
+python-dotenv>=1.0.0
+PyYAML>=6.0.1

@@ -1,0 +1,13 @@
+# Minimal dependencies for running pytest in CI.
+# The full local environment still uses requirements.txt.
+
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.24.0
+pymysql>=1.1.0
+SQLAlchemy>=2.0.0
+cryptography>=42.0.0
+pytest>=8.0.0
+pytest-cov>=4.1.0
+python-dotenv>=1.0.0
+PyYAML>=6.0.1
