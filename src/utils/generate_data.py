@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-PayFlow — Synthetic Data Generator (production-like 10k dataset)
+PayFlow — Synthetic Data Generator (production-like dataset)
 
 Generates realistic payment transaction data for portfolio demonstration:
 - 100 merchants
 - 30 days of data (September 2026)
-- 10,000 internal transactions
+- Configurable internal transactions (default 10,000)
 - Matching gateway transactions from 3 providers with different schemas
 - Realistic data-quality issues injected deliberately into provider records:
     * duplicates
@@ -25,8 +25,10 @@ Generates realistic payment transaction data for portfolio demonstration:
 
 Run with:
     python src/utils/generate_data.py
+    python src/utils/generate_data.py --num-transactions 100000
 """
 
+import argparse
 import csv
 import json
 import random
@@ -676,10 +678,25 @@ def write_seed_gateway_sql(gateway_records: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic PayFlow transaction data"
+    )
+    parser.add_argument(
+        "--num-transactions",
+        type=int,
+        default=NUM_TRANSACTIONS,
+        help="Number of internal transactions to generate (default: 10,000)",
+    )
+    args = parser.parse_args()
+
+    global NUM_TRANSACTIONS, EXTRA_GATEWAY_TRANSACTIONS
+    NUM_TRANSACTIONS = args.num_transactions
+    EXTRA_GATEWAY_TRANSACTIONS = max(150, int(NUM_TRANSACTIONS * 0.015))
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     RAW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Generating merchants...")
+    print(f"Generating {NUM_TRANSACTIONS:,} internal transactions...")
     merchants = generate_merchants()
 
     print("Generating internal transactions...")
