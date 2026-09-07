@@ -40,6 +40,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
 
+      - name: Load database schema
+        run: |
+          mysql -h 127.0.0.1 -P 3307 -u payflow -ppayflow payflow < sql/schema/01_create_database.sql
+
       - name: Run pytest
         run: pytest tests/ -v
 
